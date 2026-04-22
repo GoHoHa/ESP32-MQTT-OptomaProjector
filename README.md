@@ -14,7 +14,7 @@ Opening this IP in your browser will bring up a dashboard featuring status infor
 
 ![Screen shot homepage](https://github.com/GoHoHa/ESP32-MQTT-OptomaProjector/blob/main/images/homepage.jpg "Screen shot homepage")
 
-It uses asyncio and [Peter Hinchs Asynchronous MQTT](https://github.com/peterhinch/micropython-mqtt) implementation, it also tries to get correct time from [NTP](https://en.wikipedia.org/wiki/Network_Time_Protocol) server. I think the code is clean an easy to understand. Feel free to add more commands as needed or other reuse for any other serial communication hardware (e.g. gas boiler, . 
+It uses asyncio and [Peter Hinchs Asynchronous MQTT](https://github.com/peterhinch/micropython-mqtt) implementation, it also tries to get correct time from [NTP](https://en.wikipedia.org/wiki/Network_Time_Protocol) server. I think the code is clean an easy to understand. Feel free to add more commands as needed or reuse the code for any other serial communication hardware (e.g. gas boiler). 
 
 ## Hardware
 
