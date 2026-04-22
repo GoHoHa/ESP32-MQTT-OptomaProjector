@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<!-- version of 29.03.2026 -->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Optoma HD25 MQTT Bridge</title>
+
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    margin: 0;
+}
+
+.container {
+    max-width: 900px;
+    margin: auto;
+    padding: 10px;
+}
+
+.card {
+    background: #1e293b;
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 10px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+}
+
+h2 {
+    margin-top: 0; 
+    color: #f59e0b;
+}
+
+h3 { margin-top: 0; }
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.value {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.on { color: #22c55e; }
+.off { color: #ef4444; }
+.unknown { color: #f59e0b; }
+
+button {
+    margin-bottom: 5px;
+    padding: 10px;
+    border: none;
+    border-radius: 8px;
+    background: #334155;
+    color: white;
+    cursor: pointer;
+}
+
+input {
+    margin-bottom: 5px;
+    padding: 10px;
+    width: 232px;
+    border-radius: 8px;
+    border: 1px solid #475569;
+    background: #334155;
+    color: white;
+}
+
+button:hover {
+    background: #475569;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+th, td {
+    padding: 6px;
+    text-align: left;
+}
+
+th { background: #334155; }
+
+#logs tr:nth-child(odd) { background: #1e293b; }
+#logs tr:nth-child(even) { background: #182130; }
+
+.tx { color: #f8ad38; }
+.rx { color: #3ec03a; }
+.sy { color: #c084fc; }
+
+.status {
+    font-size: 12px;
+    opacity: 0.7;
+    margin-left: auto;
+}
+
+.version {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+    align-items: center;
+}
+
+.msg-input {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.spacer {
+    flex-grow: 1;
+    min-width: 10px;
+}
+
+.info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    width: 100%;
+}
+
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<div class="card">
+<h2>Optoma HD25 MQTT Bridge</h2>
+
+<div class="grid">
+<div>
+<div>IP</div>
+<div class="value" id="ip">%IP%</div>
+</div>
+
+<div>
+<div>Uptime (h:m:s)</div>
+<div class="value" id="uptime">-</div>
+</div>
+
+<div>
+<div>State</div>
+<div id="state" class="value unknown">Unknown</div>
+</div>
+
+<div>
+<div>Lamp age (h)</div>
+<div id="lamp" class="value">-</div>
+</div>
+</div>
+
+<br>
+
+<div class="controls">
+    <button onclick="sendPower('ON')">Power ON</button>
+    <button onclick="sendPower('OFF')">Power OFF</button>
+    <div class="spacer"></div>
+    <div class="msg-input">
+        <input type="text" id="customMsg" maxlength="30" placeholder="Messagetext">
+        <button onclick="sendMsg()">Send Message</button>
+    </div>
+</div>
+
+<div class="info">
+    <div class="version">Ver: %VERSION%</div>
+    <div class="status" id="status">connecting...</div>
+</div>
+
+</div>
+
+<div class="card">
+<h3>Logs</h3>
+<table id="logs">
+<tr><th>Time</th><th>Class</th><th>Data</th></tr>
+<tbody id="log"></tbody>
+</table>
+</div>
+
+</div>
+
+<script>
+async function update() {
+    try {
+        let r = await fetch("/data");
+        let j = await r.json();
+
+        document.getElementById("uptime").innerText = j.uptime;
+
+        let stateEl = document.getElementById("state");
+        stateEl.innerText = j.state.toUpperCase();
+        stateEl.className = "value " + j.state;
+
+        document.getElementById("lamp").innerText = j.lamp ?? "-";
+
+        let log = "";
+        j.log.forEach(e => {
+            const cls = {
+                U_TX: "tx",
+                U_RX: "rx"
+            }[e.dir] ?? "sy";
+            log += `<tr>
+                <td>${e.time}</td>
+                <td class="${cls}">${e.dir}</td>
+                <td>${e.data}</td>
+            </tr>`;
+        });
+
+        document.getElementById("log").innerHTML = log;
+
+        document.getElementById("status").innerText = "OK";
+
+    } catch(e) {
+        document.getElementById("status").innerText = "ERROR";
+        console.log("update failed", e);
+    }
+}
+
+function sendPower(cmd){
+    fetch("/cmd?power=" + cmd);
+}
+
+function sendMsg() {
+    let msg = document.getElementById("customMsg").value;
+    if (msg) {
+        fetch("/cmd?msg=" + encodeURIComponent(msg));
+        document.getElementById("customMsg").value = "";
+    }
+}
+
+setInterval(update, 5000);
+window.onload = update;
+</script>
+
+</body>
+</html>
