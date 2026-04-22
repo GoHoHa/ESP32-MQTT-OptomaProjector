@@ -9,8 +9,8 @@ The MicroPython script enables to connect an Optoma Projector with RS232 interfa
 So far it transmits **power ON** and **OFF** command and can make use of the **text notification** option.
 It polls the status and current **lamp age**.
 
-After starting the ESP32 published it's IP adress via MQTT.
-If you open the IP in your browser you will see a homepage with status information, some controls and a log with the recent communication.
+After startup, the ESP32 publishes its IP address via MQTT.
+Opening this IP in your browser will bring up a dashboard featuring status information, device controls, and a log of recent communications.
 
 ![Screen shot homepage](https://github.com/GoHoHa/ESP32-MQTT-OptomaProjector/blob/main/images/homepage.jpg "Screen shot homepage")
 
