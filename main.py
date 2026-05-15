@@ -2,9 +2,12 @@
 RS232-MQTT-Bridge for Optoma HD25 Projector
 (C) Jürgen Gluch, 2026
 versions:
-10.04.2026 - rebuild from begining based on mqtt_as example
+12.05.2026 a - stability changes to http server
+           b - change json to ujson
+           c - keep index.html in RAM 
+10.04.2026 a - rebuild from begining based on mqtt_as example
 """
-VERSION_DATE = "10.04.2026 a"
+VERSION_DATE = "12.05.2026 c"
 
 import sys
 import gc
@@ -12,7 +15,7 @@ import machine
 from mqtt_as import MQTTClient, config
 import uasyncio as asyncio
 import ubinascii
-import json
+import ujson
 import time
 import network
 from machine import UART, Pin, WDT
@@ -44,20 +47,34 @@ uart = None
 projector_state = "unknown"   # "on" / "off" / "unknown"
 lamp_hours = None
 
+LED_PIN = 2  # onboard blue LED on ESP32-c3 super mini = GPIO8, on ESP32-WROOM = GPIO2
+led = Pin(LED_PIN, Pin.OUT, Pin.PULL_UP)
+led.value(1) # turn LED off 
+
+# ========== Cache index.html in RAM =====
+try:
+    with open("index.html", "r") as f:
+        INDEX_TEMPLATE = f.read()
+except Exception as e:
+    INDEX_TEMPLATE = "<h1>index.html missing</h1>"
+    log_event("HTTP", f"Error loading index.html: {e}")
+
 # ========== Time and Logger ==========
 async def ntp_sync():
     while True:
-        log_event("SYS", "Scheduled NTP sync")
+        log_event("SYST", "Scheduled NTP sync")
         for _ in range(3):
             try:
                 ntptime.host = cfg.NTP_SERVER
                 ntptime.settime()
-                log_event("SYST", f"NTP synced, local time: {format_time(time.time())}")
+                text = f"NTP synced, local time: {format_time(time.time())}"
+                log_event("SYST", text)
+                await client.publish(cfg.MQTT_DEVICE+cfg.TOPIC_STATE_ESP, text)
                 return True
             except Exception as e:
                 log_event("SYST", f"NTP error: {e}")
                 await asyncio.sleep(5)
-        await asyncio.sleep(86400)  # 24 hours
+        await asyncio.sleep(43200)  # 12 hours
 
 def is_dst_germany(ts):
     dt = time.localtime(ts) 
@@ -117,6 +134,7 @@ async def up(client):
         await client.up.wait()  # Wait on an Event
         client.up.clear()
         # renew subscriptions
+        await ntp_sync()
         await client.subscribe(cfg.MQTT_DEVICE+cfg.TOPIC_CMD_POWER, 1)
         await client.subscribe(cfg.MQTT_DEVICE+cfg.TOPIC_CMD_MSG, 1)
         log_event("MQTT", f"Connencted to {cfg.WIFI_SSID} and broker {cfg.MQTT_BROKER}")
@@ -253,13 +271,9 @@ def urldecode(s):
     return out
 
 def build_html():
-    try:
-        with open("index.html", "r") as f:
-            html = f.read()
-    except:
-        return "HTML build: File error"
+    html = INDEX_TEMPLATE  # use RAM copy of index.html
     ip = network.WLAN(network.STA_IF).ifconfig()[0]
-    state_class = projector_state  # "on/off/unknown"
+    state_class = projector_state
     html = html.replace("%IP%", ip)
     html = html.replace("%UPTIME%", uptime_hms())
     html = html.replace("%STATE%", projector_state.upper())
@@ -268,47 +282,95 @@ def build_html():
     html = html.replace("%VERSION%", VERSION_DATE)
     return html
 
-async def http_server():
-    addr = socket.getaddrinfo("0.0.0.0", 80)[0][-1]
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+async def http_handler(reader, writer):
     try:
-        s.bind(addr)
-        s.listen(2)
-    except OSError as e:
-        log_event("HTTP", f"Socket bind error: {e}")
-        s.close()
-        await asyncio.sleep(1)
-    s.setblocking(True)
-    log_event("HTTP", f"Server running on http://{network.WLAN(network.STA_IF).ifconfig()[0]}:80")
+        # Read up to 1 KB of the request (enough for simple GETs)
+        req = await reader.read(1024)
+        if not req:
+            await writer.aclose()
+            return
+        # First line: "GET /path HTTP/1.1"
+        first_line = req.split(b"\r\n", 1)[0]
+        parts = first_line.split()
+        if len(parts) < 2:
+            await writer.aclose()
+            return
+        path = parts[1].decode()  # e.g. "/data", "/cmd?power=ON", "/"
+        # Routing
+        if path.startswith("/data"):
+            data = ujson.dumps(build_json())
+            body = data.encode()
+            headers = (
+                "HTTP/1.0 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "\r\n"
+            ).encode()
+            writer.write(headers + body)
+        elif path.startswith("/cmd?"):
+            # Very simple query parsing
+            query = path.split("?", 1)[1]
+            if query.startswith("power=ON"):
+                enqueue(cfg.CMD_PWR_ON)
+                body = b"OK"
+            elif query.startswith("power=OFF"):
+                enqueue(cfg.CMD_PWR_OFF)
+                body = b"OK"
+            elif query.startswith("msg="):
+                msg = query.split("msg=", 1)[1]
+                msg = urldecode(msg)
+                enqueue(cmd_msg(msg))
+                body = b"OK"
+            else:
+                body = b"UNKNOWN"
+            headers = (
+                "HTTP/1.0 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "\r\n"
+            ).encode()
+            writer.write(headers + body)
+        else:
+            html = build_html()
+            body = html.encode()
+            headers = (
+                "HTTP/1.0 200 OK\r\n"
+                "Content-Type: text/html\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "\r\n"
+            ).encode()
+            writer.write(headers + body)
+        await writer.drain()
+    except Exception as e:
+        log_event("HTTP", f"handler error: {e}")
+    finally:
+        try:
+            await writer.aclose()
+        except:
+            pass
+
+async def http_server():
+    # Start a uasyncio stream server
+    server = await asyncio.start_server(http_handler, "0.0.0.0", 80)
+    ip = network.WLAN(network.STA_IF).ifconfig()[0]
+    log_event("HTTP", f"Server running on http://{ip}:80")
+    # Keep the server alive; handlers run in their own tasks
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+async def http_supervisor():
+    # Automatically restart the HTTP server if it ever dies
     while True:
         try:
-            client_sock, client_addr = s.accept()
-            client_sock.settimeout(5.0)  # Timeout after 5 seconds
-            #print("HTTP connection from", client_addr)
-            req = client_sock.recv(1024)
-            if b"GET /data" in req:
-                import ujson
-                data = ujson.dumps(build_json())
-                response = b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n" + data.encode()
-            elif b"GET /cmd?power=ON" in req:
-                enqueue(cfg.CMD_PWR_ON)
-            elif b"GET /cmd?power=OFF" in req:
-                enqueue(cfg.CMD_PWR_OFF)
-            elif b"GET /cmd?msg=" in req:
-                msg = req.decode().split("msg=")[1].split(" ")[0]
-                msg = urldecode(msg)  # Decode URL-encoded characters
-                enqueue(cmd_msg(msg))
-                response = b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nOK"
-            else:
-                html = build_html()
-                response = b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n" + html.encode()
-            client_sock.sendall(response)
+            await http_server()
         except Exception as e:
-            log_event("HTTP", f" server error: {e}")
-        finally:
-            client_sock.close()
-        await asyncio.sleep_ms(50)
+            log_event("HTTP", f"server crashed: {e}, restarting in 5s")
+            await asyncio.sleep(5)
+
 
 def build_json():
     rows = []
@@ -335,23 +397,34 @@ async def main(client):
     for coroutine in (up, messages):
         asyncio.create_task(coroutine(client))
     
-    await asyncio.sleep(5)
+    await asyncio.sleep(3)
+    # start web server
+    asyncio.create_task(http_supervisor())
+
+    await asyncio.sleep(3)
     # start communicatio with projector
     asyncio.create_task(rs232_writer())
     asyncio.create_task(rs232_reader())
     asyncio.create_task(poll_status())
-    
-    # start web server
-    asyncio.create_task(http_server())
-    
+        
     # run main loop
     while True:
-        await asyncio.sleep(120)
+        led.value(1)
+        await asyncio.sleep(cfg.POLLING_PAUSE)
+        led.value(0)
         # If WiFi is down the following will pause for the duration.
         gc.collect()
         log_event("SYST", f"Uptime: {uptime_hms()}, free memory {gc.mem_free()} byte")
         await client.publish(cfg.MQTT_DEVICE+cfg.TOPIC_STATE_ESP, f"Uptime: {uptime_hms()}, free memory {gc.mem_free()}", qos = 1)
+        
 
+# intitialise WIFI
+network.country("DE")
+network.WLAN(network.STA_IF).active(False)
+time.sleep(0.1)
+network.WLAN(network.STA_IF).active(True)
+network.WLAN(network.STA_IF).config(txpower=10)
+network.WLAN(network.STA_IF).disconnect()
 
 config["queue_len"] = 1  # Use event interface with default queue size
 MQTTClient.DEBUG = False  # Optional: print diagnostic messages
@@ -360,10 +433,15 @@ try:
     asyncio.run(main(client))
 except Exception as e:
     log_event("SYST", f"Fatal error: {e}, resetting in 10s")
+    led.value(0)
     time.sleep(10)
+    led.value(1)
     #sys.exit()
+    network.WLAN(network.STA_IF).disconnect()
+    network.WLAN(network.STA_IF).active(False)
     machine.reset()
 finally:
     client.close()  # Prevent LmacRxBlk:1 errors
+
 
 
