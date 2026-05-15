@@ -23,6 +23,7 @@ You need:
 - a USB power supply
 - any ESP32 board (I used a ESP32-C3-SuperMini)
 - an MAX3232 breakout board with a female D-sub9 connector, like [this](https://de.aliexpress.com/item/4000055222836.html)
+- Optional: Capacitors (parallel 46µF elco + 100nF ceramic) between 5V supply and ground, and between MAX3232's VCC and GND); GPIO's connected by 22-56 Ohm resistor
 
 Connect MAX3232's TX and RX with two free GPIO for UART connection, connect 3V3 from ESP32 to MAX3232 VCC:
 
